@@ -28,23 +28,38 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clear; close all; clc;
 
+% Plot defaults
+set(0,'defaultTextInterpreter','latex')
+set(0,'DefaultTextFontName','Times',...
+'DefaultTextFontSize',20,...
+'DefaultAxesFontName','Times',...
+'DefaultAxesFontSize',20,...
+'DefaultLineLineWidth',2.0,...
+'DefaultAxesBox','on',...
+'defaultAxesLineWidth',2.0,...
+'DefaultFigureColor','w',...
+'DefaultLineMarkerSize',5.75)
+
 %% Parameters
-     nx = 0080;	% number of cells
-    CFL = 0.20;	% Courant Number
+     nx = 0160;	% number of cells
+    CFL = 0.50;	% Courant Number
    tEnd = 0.40; % End time
 
-fluxfun='buckley'; % select flux function
+fluxfun='linear'; % select flux function
 % Define our Flux function
 switch fluxfun
     case 'linear'   % Scalar Advection, CFL_max: 0.65
         c=1.0; flux = @(w) c*w; 
         dflux = @(w) c*ones(size(w));
+        ICcase = 1; tEnd=2.0; IC=0;
     case 'burgers' % Burgers, CFL_max: 0.40  
         flux = @(w) w.^2/2; 
         dflux = @(w) w; 
+        ICcase=2; IC=4; CFL=0.4; tEnd=2.0;
     case 'buckley' % Buckley-Leverett, CFL_max: 0.20 & tEnd: 0.40
         flux = @(w) 4*w.^2./(4*w.^2+(1-w).^2);
         dflux = @(w) 8*w.*(1-w)./(5*w.^2-2*w+1).^2;
+        ICcase=2; IC=9; CFL=0.10; tEnd=0.4;
 end
 
 sourcefun='dont'; % add source term
@@ -60,18 +75,18 @@ end
 a=-1; b=1; dx=(b-a)/nx; x=a+dx/2:dx:b; 
 
 % Build IC
-ICcase=2;  % {1}Testing, {2}Costum ICs
+%ICcase=2; %overide for:  % {1}Testing, {2}Costum ICs
 switch ICcase
     case 1 % Testing IC
         u0=TestingIC(x);  % Jiang and Shu IC
     case 2 % Guassian IC
-        u0=CommonIC(x,9)-1; % cases 1-10 <- check them out!
+        u0=CommonIC(x,IC)-1; % cases 1-10 <- check them out!
     otherwise
         error('IC file not listed');
 end
 
 % Plot range
-dl=0.1; plotrange=[a,b,min(u0)-dl,max(u0)+dl];
+dl=0.1; plotrange=[a,b,min(u0)-dl,1.1*max(u0)+dl];
 
 %% Solver Loop
 
@@ -168,12 +183,57 @@ cputime=toc; fprintf('WENO-Z  cputime: %g\n',cputime);
 % save result and clear space
 u_Z = u; clear t it u;
 
+% load initial conditions
+t=0; it=0; u=u0; 
+
+tic
+while t < tEnd
+	% Update/correct time step
+    dt=CFL*dx/max(abs(u)); if t+dt>tEnd, dt=tEnd-t; end
+    
+	% Update time and iteration counter
+    t=t+dt; it=it+1;
+    
+    % RK Initial step
+    uo = u;
+    
+    % 1st stage
+    dF = MUSCL_THINCresAdv1d(u,flux,dflux,S,dx,'MM');
+    u = uo-dt*dF;
+    
+    % 2nd Stage
+    dF = MUSCL_THINCresAdv1d(u,flux,dflux,S,dx,'MM');
+    u = 0.75*uo+0.25*(u-dt*dF);
+
+    % 3rd stage
+    dF = MUSCL_THINCresAdv1d(u,flux,dflux,S,dx,'MM');
+    u = (uo+2*(u-dt*dF))/3;
+end
+cputime=toc; fprintf('THINC-BVD  cputime: %g\n',cputime);
+
+% save result and clear space
+u_T = u; clear t it u;
+
+% load reference solution obtained with WENO-JS using 1000 nodes
+if IC==9; load('ReferenceSolution.mat'); end
+
 %% Final Plot
-plot(x,u0,'-',x,u_JS,'o',x,u_M,'s',x,u_Z,'d'); axis(plotrange);
-legend('Initial Condition','WENO5-JS','WENO5-M','WENO5-Z'); legend boxoff;
-title('WENO5 - cell averages plot','interpreter','latex','FontSize',18);
-xlabel('$\it{x}$','interpreter','latex','FontSize',14);
-ylabel({'$\it{u(x)}$'},'interpreter','latex','FontSize',14);
+switch fluxfun
+    case 'linear'
+        plot(x,u0,'-k',x,u_M,'s',x,u_Z,'d',x,u_T,'^'); axis(plotrange);
+        legend({'IC','WENO5-M','WENO5-Z','MUSCL-THINC'},'interpreter','latex','FontSize',14,'orientation','horizontal'); legend boxoff;
+    case 'buckley'
+        plot(x,u0,'--k',x_Exact,u_Exact,'-k',x,u_JS,'or',x,u_M,'s',x,u_Z,'d',x,u_T,'^'); axis(plotrange);
+        legend({'IC','Solution','WENO5-JS','WENO5-M','WENO5-Z','MUSCL-THINC'},'interpreter','latex','FontSize',14); legend boxoff;
+end
+title('Cell averages','interpreter','latex','FontSize',16);
+xlabel('$\it{x}$','interpreter','latex','FontSize',18);
+ylabel({'$\it{u(x)}$'},'interpreter','latex','FontSize',18);
+
+fig = gcf;
+fig.PaperUnits = 'inches';
+fig.PaperPosition = [0 0 8 5];
+print('-depsc',['NumericalMethods_',fluxfun,'Test.eps']);
 
 %% Conclusion
 %
